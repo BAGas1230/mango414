@@ -3577,27 +3577,15 @@ void wlan_hdd_cfg80211_acs_ch_select_evt(struct hdd_adapter *adapter)
 	cfg80211_vendor_event(vendor_event, GFP_KERNEL);
 }
 
-/**
- * hdd_is_wlm_latency_manager_supported - Checks if WLM Latency manager is
- *                                        supported
- * @hdd_ctx: The HDD context
- *
- * Return: True if supported, false otherwise
- */
-static inline
-bool hdd_is_wlm_latency_manager_supported(struct hdd_context *hdd_ctx)
-{
-	bool latency_enable;
-
-	if (QDF_IS_STATUS_ERROR(ucfg_mlme_get_latency_enable
-				(hdd_ctx->psoc, &latency_enable)))
-		return false;
-
-	if (latency_enable &&
-	    sme_is_feature_supported_by_fw(VDEV_LATENCY_CONFIG))
-		return true;
-	else
-		return false;
+	con_sap_adapter = hdd_get_con_sap_adapter(adapter, false);
+	if (con_sap_adapter &&
+		test_bit(ACS_PENDING, &con_sap_adapter->event_flags)) {
+		INIT_DELAYED_WORK(&con_sap_adapter->acs_pending_work,
+				      wlan_hdd_cfg80211_start_pending_acs);
+		/* Lets give 1500ms for OBSS + START_BSS to complete */
+		queue_delayed_work(system_power_efficient_wq, &con_sap_adapter->acs_pending_work,
+					msecs_to_jiffies(1500));
+	}
 }
 
 static int
