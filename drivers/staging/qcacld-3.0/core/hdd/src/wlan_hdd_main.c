@@ -14388,6 +14388,8 @@ static int hdd_module_init(void)
 	if (ret)
 		pr_err("wlan_hdd_state_create:%x\n", ret);
 
+	hdd_driver_load();
+
 	return ret;
 }
 
