@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <trace/events/power.h>
 #include <linux/sched/sysctl.h>
+#include <linux/battery_saver.h>
 #include "sched.h"
 
 #define SUGOV_KTHREAD_PRIORITY	50
@@ -314,6 +315,21 @@ static void sugov_get_util(unsigned long *util, unsigned long *max, int cpu)
 static void sugov_set_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
 				   unsigned int flags)
 {
+	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
+
+	if (!sg_policy->tunables->iowait_boost_enable || is_battery_saver_on())
+		return;
+
+	/* Clear iowait_boost if the CPU apprears to have been idle. */
+	if (sg_cpu->iowait_boost) {
+		s64 delta_ns = time - sg_cpu->last_update;
+
+		if (delta_ns > TICK_NSEC) {
+			sg_cpu->iowait_boost = 0;
+			sg_cpu->iowait_boost_pending = false;
+		}
+	}
+
 	if (flags & SCHED_CPUFREQ_IOWAIT) {
 		if (sg_cpu->iowait_boost_pending)
 			return;
@@ -703,12 +719,8 @@ static ssize_t hispeed_load_store(struct gov_attr_set *attr_set,
 {
 	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
-	if (kstrtouint(buf, 10, &tunables->hispeed_load))
-		return -EINVAL;
-
-	tunables->hispeed_load = min(100U, tunables->hispeed_load);
-
-	return count;
+	return sprintf(buf, "%u\n", is_battery_saver_on() ?
+				0 : tunables->iowait_boost_enable);
 }
 
 static ssize_t hispeed_freq_show(struct gov_attr_set *attr_set, char *buf)
