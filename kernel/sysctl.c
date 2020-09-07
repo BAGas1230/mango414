@@ -66,7 +66,7 @@
 #include <linux/kexec.h>
 #include <linux/bpf.h>
 #include <linux/mount.h>
-
+#include <linux/battery_saver.h>
 #include <linux/uaccess.h>
 #include <asm/processor.h>
 
@@ -3383,6 +3383,41 @@ int proc_douintvec_capacity(struct ctl_table *table, int write,
 	return do_proc_dointvec(table, write, buffer, lenp, ppos,
 				do_proc_douintvec_capacity_conv, NULL);
 }
+
+#ifndef CONFIG_SCHED_WALT
+int sched_boost_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp,
+		loff_t *ppos)
+{
+	int ret;
+	unsigned int *data = (unsigned int *)table->data;
+
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+
+	if (ret || !write)
+		return ret;
+
+	pr_debug("%s set sb to %i\n", current->comm, *data);
+
+#ifdef CONFIG_DYNAMIC_STUNE_BOOST
+	if (is_battery_saver_on())
+		return ret;
+
+	if (*data == 1) {
+		do_stune_boost("top-app", 20, &boost_slot_ta);
+		do_stune_boost("foreground", 5, &boost_slot_fg);
+	} else if (*data == 3) {
+		do_stune_boost("top-app", 10, &boost_slot_ta);
+		do_stune_boost("foreground", 1, &boost_slot_fg);
+	} else {
+		reset_stune_boost("top-app", boost_slot_ta);
+		reset_stune_boost("foreground", boost_slot_fg);
+	}
+#endif
+
+	return ret;
+}
+#endif
 
 #else /* CONFIG_PROC_SYSCTL */
 
