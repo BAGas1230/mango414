@@ -22,6 +22,24 @@
 #include "kgsl_device.h"
 #include "kgsl_trace.h"
 
+/*
+ * "SLEEP" is generic counting both NAP & SLUMBER
+ * PERIODS generally won't exceed 9 for the relavent 150msec
+ * window, but can be significantly smaller and still POPP
+ * pushable in cases where SLUMBER is involved.  Hence the
+ * additional reliance on PERCENT to make sure a reasonable
+ * amount of down-time actually exists.
+ */
+#define MIN_SLEEP_PERIODS	3
+#define MIN_SLEEP_PERCENT	5
+
+static struct kgsl_popp popp_param[POPP_MAX] = {
+	{0, 0},
+	{-5, 20},
+	{-5, 0},
+	{0, 0},
+};
+
 /**
  * struct kgsl_midframe_info - midframe power stats sampling info
  * @timer - midframe sampling timer
@@ -53,9 +71,14 @@ static struct devfreq_dev_status last_status = { .private_data = &last_xstats };
  */
 void kgsl_pwrscale_sleep(struct kgsl_device *device)
 {
+	struct kgsl_pwrscale *psc = &device->pwrscale;
+
 	if (!device->pwrscale.enabled)
 		return;
 	device->pwrscale.on_time = 0;
+
+	psc->popp_level = 0;
+	clear_bit(POPP_PUSH, &device->pwrscale.popp_state);
 
 	/* to call devfreq_suspend_device() from a kernel thread */
 	queue_work(device->pwrscale.devfreq_wq,
@@ -130,6 +153,18 @@ void kgsl_pwrscale_update_stats(struct kgsl_device *device)
 		struct kgsl_power_stats stats;
 
 		device->ftbl->power_stats(device, &stats);
+		if (psc->popp_level) {
+			u64 x = stats.busy_time;
+			u64 y = stats.ram_time;
+
+			do_div(x, 100);
+			do_div(y, 100);
+			x *= popp_param[psc->popp_level].gpu_x;
+			y *= popp_param[psc->popp_level].ddr_y;
+			trace_kgsl_popp_mod(device, x, y);
+			stats.busy_time += x;
+			stats.ram_time += y;
+		}
 		device->pwrscale.accum_stats.busy_time += stats.busy_time;
 		device->pwrscale.accum_stats.ram_time += stats.ram_time;
 		device->pwrscale.accum_stats.ram_wait += stats.ram_wait;
@@ -263,7 +298,7 @@ void kgsl_pwrscale_enable(struct kgsl_device *device)
 		 * run at default level;
 		 */
 		kgsl_pwrctrl_pwrlevel_change(device,
-					device->pwrctrl.num_pwrlevels - 1);
+					device->pwrctrl.default_pwrlevel);
 		device->pwrscale.enabled = false;
 	}
 }
@@ -432,6 +467,7 @@ static int popp_trans2(struct kgsl_device *device, int level)
 {
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct kgsl_pwrscale *psc = &device->pwrscale;
+	int old_level = psc->popp_level;
 
 	if (!test_bit(POPP_ON, &psc->popp_state))
 		return level;
@@ -465,6 +501,8 @@ static int popp_trans2(struct kgsl_device *device, int level)
 		psc->popp_level = 0;
 		break;
 	}
+
+	trace_kgsl_popp_level(device, old_level, psc->popp_level);
 
 	return level;
 }
@@ -535,11 +573,13 @@ int kgsl_devfreq_target(struct device *dev, unsigned long *freq, u32 flags)
 				if (pwr->thermal_cycle == CYCLE_ACTIVE)
 					level = _thermal_adjust(pwr, i);
 				else
-					level = i;
+					level = popp_trans2(device, i);
 				break;
 			}
 		if (level != pwr->active_pwrlevel)
 			kgsl_pwrctrl_pwrlevel_change(device, level);
+	} else if (popp_stable(device)) {
+		popp_trans1(device);
 	}
 
 	*freq = kgsl_pwrctrl_active_freq(pwr);
@@ -870,7 +910,7 @@ int kgsl_pwrscale_init(struct device *dev, const char *governor)
 	dev_pm_opp_register_notifier(dev, &pwr->nb);
 
 	profile->initial_freq =
-		pwr->pwrlevels[pwr->num_pwrlevels - 1].gpu_freq;
+		pwr->pwrlevels[pwr->default_pwrlevel].gpu_freq;
 	/* Let's start with 10 ms and tune in later */
 	profile->polling_ms = 10;
 
