@@ -126,7 +126,7 @@ DATE=$(TZ=Asia/Jakarta date +"%Y%m%d-%T")
  clone() {
 	echo " "
 	msg "|| Cloning Clang ||"
-	git clone --depth=50 https://github.com/xiangfeidexiaohuo/Snapdragon-LLVM --no-tags --single-branch
+	git clone --depth=50 https://github.com/pjorektneira/aosp-clang --no-tags --single-branch
 	msg "|| Cloning ARM64 GCC ||"
 	git clone --depth=1 https://github.com/silont-project/aarch64-silont-linux-gnu.git -b arm64/11 gcc64 --no-tags --single-branch
 	msg "|| Cloning ARM GCC ||"
